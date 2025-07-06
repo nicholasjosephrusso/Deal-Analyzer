@@ -3,7 +3,7 @@ import pandas as pd
 import numpy_financial as nf
 
 st.set_page_config(page_title="Real Estate Deal Analyzer", layout="wide")
-st.title("🏠 Real Estate Deal Analyzer – Net‑Sheet Edition (v5)")
+st.title("🏠 Real Estate Deal Analyzer – Net‑Sheet Edition (v7)")
 
 # ───────────────────────────────────────────────────────────
 # 1 ▸ GLOBAL ASSUMPTIONS
@@ -14,7 +14,7 @@ with st.sidebar:
     expense_ratio = st.slider("Operating Expense Ratio", 0.00, 1.00, 0.35, 0.01)
     closing_pct   = st.slider("Closing Cost % (buy & sell)", 0.00, 0.10, 0.06, 0.005)
 
-oper_exp = market_rent * expense_ratio  # monthly operating expenses
+oper_exp = market_rent * expense_ratio  # monthly opex
 
 # ───────────────────────────────────────────────────────────
 # 2 ▸ DEAL INPUTS
@@ -25,13 +25,14 @@ num_deals  = st.sidebar.number_input("Number of Deals", 1, 4, 2)
 deal_configs = []
 for i in range(int(num_deals)):
     with st.sidebar:
-        st.markdown(f"---\n### Deal {i+1}")
+        st.markdown("---")
+        name = st.text_input("Deal Display Name", value=f"Deal {i+1}", key=f"name{i}")
         dtype = st.selectbox("Type", DEAL_TYPES, key=f"dtype{i}")
         pp    = st.number_input("Purchase Price", 0.0, 1e7, 300000.0, 10000.0, key=f"pp{i}")
         hold  = st.slider("Holding Period (yrs)", 1, 30, 10, key=f"hold{i}")
         gr    = st.slider("Annual Appreciation %", 0.00, 0.10, 0.04, 0.005, key=f"gr{i}")
         dr    = st.slider("Discount Rate %",       0.00, 0.20, 0.08, 0.005, key=f"dr{i}")
-        cfg   = dict(type=dtype, pp=pp, hold=hold, gr=gr, dr=dr)
+        cfg   = dict(name=name, type=dtype, pp=pp, hold=hold, gr=gr, dr=dr)
 
         if dtype == "Subject-To":
             cfg.update({
@@ -62,171 +63,226 @@ for i in range(int(num_deals)):
         deal_configs.append(cfg)
 
 # ───────────────────────────────────────────────────────────
-# 3 ▸ CASH‑FLOW HELPERS
+# 3 ▸ HELPER FUNCTIONS
 # ───────────────────────────────────────────────────────────
 
 def amortize(balance, rate_mo, payment, n):
-    bal = balance
+    bal=balance
     for _ in range(n):
-        interest = bal * rate_mo
-        bal -= (payment - interest)
+        interest=bal*rate_mo
+        bal-=payment-interest
     return bal
 
 
+def monthly_cf(payment):
+    return market_rent - oper_exp - payment
+
+
+def build_metrics(sheet, cf, hold):
+    annual_cash_flow = sheet["Total Rental CF"] / hold
+    coc = annual_cash_flow / sheet["Initial Investment"] if sheet["Initial Investment"] else 0
+    ending_equity = sheet["Profit"] + sheet["Initial Investment"]
+    ann_roi = (ending_equity / sheet["Initial Investment"]) ** (1/hold) - 1 if sheet["Initial Investment"] else 0
+    irr = nf.irr(cf) if cf else 0
+    return coc, ann_roi, irr
+
+# ───────────────────────────────────────────────────────────
+# 4 ▸ DEAL MODELS
+# ───────────────────────────────────────────────────────────
+
 def subject_cf(p):
     pp, eb, rate, term, prem, hold = p['pp'], p['eb'], p['rate'], p['term'], p['premium'], p['hold']
-    mrate, months = rate/12, term*12
-    pay  = nf.pmt(mrate, months, -eb)
-    init = (pp - eb) + prem + pp*closing_pct
-    cf   = [-init]
-    bal  = amortize(eb, mrate, pay, hold*12)
-    rent_cf = (market_rent - oper_exp - pay) * hold * 12
-    sale    = pp * (1 + p['gr']) ** hold
-    sale_net= sale - sale*closing_pct - bal
-    cf += [market_rent - oper_exp - pay]*(hold*12)
+    # Calculate payment and cash flows
+    pay = nf.pmt(rate / 12, term * 12, -eb)
+    rent = market_rent
+    exp = oper_exp
+    mon = rent - exp - pay
+    init = (pp - eb) + prem + pp * closing_pct
+    total_rent = mon * hold * 12
+    bal = amortize(eb, rate / 12, pay, hold * 12)
+    sale = pp * (1 + p['gr']) ** hold
+    sale_net = sale - sale * closing_pct - bal
+    cf = [-init] + [mon] * (hold * 12)
     cf[-1] += sale_net
+    # Build net-sheet including breakdown
     sheet = {
-        "Purchase Price": pp,
-        "Premium": prem,
-        "Initial Investment": init,
-        "P&I / mo": pay,
-        "Total Rental CF": rent_cf,
-        "Net Sale Proceeds": sale_net,
-        "Profit": rent_cf + sale_net,
+        "Purchase Price":        pp,
+        "Existing Loan Balance": eb,
+        "Premium Paid":          prem,
+        "Closing Costs (buy)":   pp * closing_pct,
+        "Initial Investment":    init,
+        "Monthly Rent":          rent,
+        "Operating Expenses":    exp,
+        "Debt Service (mo)":     pay,
+        "Monthly Net Cash":      mon,
+        "Total Rental CF":       total_rent,
+        "Sale Price":            sale,
+        "Net Sale Proceeds":     sale_net,
+        "Profit":                total_rent + sale_net,
     }
-    return cf, sheet
-
+    coc, ann_roi, irr = build_metrics(sheet, cf, hold)
+    return cf, sheet, coc, ann_roi, irr
 
 def conventional_cf(p):
     pp, dp, rate, term, hold = p['pp'], p['dp_pct'], p['rate'], p['term'], p['hold']
-    down = pp*dp
+    down = pp * dp
     loan = pp - down
-    pay  = nf.pmt(rate/12, term*12, -loan)
-    init = down + pp*closing_pct
-    cf   = [-init]
-    bal  = amortize(loan, rate/12, pay, hold*12)
-    rent_cf = (market_rent - oper_exp - pay) * hold * 12
-    sale    = pp*(1+p['gr'])**hold
-    sale_net= sale - sale*closing_pct - bal
-    cf += [market_rent - oper_exp - pay]*(hold*12)
-    cf[-1]+= sale_net
+    pay = nf.pmt(rate / 12, term * 12, -loan)
+    rent = market_rent
+    exp = oper_exp
+    mon = rent - exp - pay
+    init = down + pp * closing_pct
+    total_rent = mon * hold * 12
+    bal = amortize(loan, rate / 12, pay, hold * 12)
+    sale = pp * (1 + p['gr']) ** hold
+    sale_net = sale - sale * closing_pct - bal
+    cf = [-init] + [mon] * (hold * 12)
+    cf[-1] += sale_net
     sheet = {
-        "Purchase Price": pp,
-        "Down Payment": down,
-        "Initial Investment": init,
-        "P&I / mo": pay,
-        "Total Rental CF": rent_cf,
-        "Net Sale Proceeds": sale_net,
-        "Profit": rent_cf + sale_net,
+        "Purchase Price":        pp,
+        "Down Payment":          down,
+        "Loan Amount":           loan,
+        "Closing Costs (buy)":   pp * closing_pct,
+        "Initial Investment":    init,
+        "Monthly Rent":          rent,
+        "Operating Expenses":    exp,
+        "Debt Service (mo)":     pay,
+        "Monthly Net Cash":      mon,
+        "Total Rental CF":       total_rent,
+        "Sale Price":            sale,
+        "Net Sale Proceeds":     sale_net,
+        "Profit":                total_rent + sale_net,
     }
-    return cf, sheet
-
+    coc, ann_roi, irr = build_metrics(sheet, cf, hold)
+    return cf, sheet, coc, ann_roi, irr
 
 def seller_fin_cf(p):
     pp, fp, rate, term, hold = p['pp'], p['fin_pct'], p['rate'], p['term'], p['hold']
-    financed = pp*fp
-    pay = nf.pmt(rate/12, term*12, -financed)
-    init = (pp - financed) + pp*closing_pct
-    cf = [-init]
-    bal = amortize(financed, rate/12, pay, hold*12)
-    rent_cf = (market_rent - oper_exp - pay) * hold * 12
-    sale = pp*(1+p['gr'])**hold
-    sale_net = sale - sale*closing_pct - bal
-    cf += [market_rent - oper_exp - pay]*(hold*12)
-    cf[-1]+= sale_net
-    sheet = {
-        "Purchase Price": pp,
-        "Seller‑Financed %": fp,
-        "Initial Investment": init,
-        "P&I / mo": pay,
-        "Total Rental CF": rent_cf,
-        "Net Sale Proceeds": sale_net,
-        "Profit": rent_cf + sale_net,
-    }
-    return cf, sheet
-
-
-def brrrr_cf(p):
-    pp, rehab, arv, rr, rlv, hold = p['pp'], p['rehab'], p['arv'], p['rr'], p['rlv'], p['hold']
-    cost = pp + rehab + pp*closing_pct
-    loan = arv*rlv
-    pay  = nf.pmt(rr/12, hold*12, -loan)
-    init = cost - loan  # cash out via refinance
-    cf = [-init]
-    rent_cf = (market_rent - oper_exp - pay) * hold * 12
-    sale = arv * (1 + p['gr']) ** hold
-    bal  = amortize(loan, rr/12, pay, hold*12)
-    sale_net = sale - sale*closing_pct - bal
-    cf += [market_rent - oper_exp - pay]*(hold*12)
+    financed = pp * fp
+    pay = nf.pmt(rate / 12, term * 12, -financed)
+    rent = market_rent
+    exp = oper_exp
+    mon = rent - exp - pay
+    init = (pp - financed) + pp * closing_pct
+    total_rent = mon * hold * 12
+    bal = amortize(financed, rate / 12, pay, hold * 12)
+    sale = pp * (1 + p['gr']) ** hold
+    sale_net = sale - sale * closing_pct - bal
+    cf = [-init] + [mon] * (hold * 12)
     cf[-1] += sale_net
     sheet = {
-        "Purchase Price": pp,
-        "Rehab": rehab,
-        "Initial Investment": init,
-        "P&I / mo": pay,
-        "Total Rental CF": rent_cf,
-        "Net Sale Proceeds": sale_net,
-        "Profit": rent_cf + sale_net,
+        "Purchase Price":        pp,
+        "Seller-Financed %":     fp,
+        "Closing Costs (buy)":   pp * closing_pct,
+        "Initial Investment":    init,
+        "Monthly Rent":          rent,
+        "Operating Expenses":    exp,
+        "Debt Service (mo)":     pay,
+        "Monthly Net Cash":      mon,
+        "Total Rental CF":       total_rent,
+        "Sale Price":            sale,
+        "Net Sale Proceeds":     sale_net,
+        "Profit":                total_rent + sale_net,
     }
-    return cf, sheet
+    coc, ann_roi, irr = build_metrics(sheet, cf, hold)
+    return cf, sheet, coc, ann_roi, irr
 
-calc_map = {"Subject-To": subject_cf, "Conventional": conventional_cf, "Seller Financing": seller_fin_cf, "BRRRR": brrrr_cf}
+def brrrr_cf(p):
+    pp, rehab, arv, rr, rlv, hold = (
+        p['pp'], p['rehab'], p['arv'], p['rr'], p['rlv'], p['hold']
+    )
+    cost = pp + rehab + pp * closing_pct
+    loan = arv * rlv
+    pay = nf.pmt(rr / 12, hold * 12, -loan)
+    rent = market_rent
+    exp = oper_exp
+    mon = rent - exp - pay
+    init = cost - loan
+    total_rent = mon * hold * 12
+    bal = amortize(loan, rr / 12, pay, hold * 12)
+    sale = arv * (1 + p['gr']) ** hold
+    sale_net = sale - sale * closing_pct - bal
+    cf = [-init] + [mon] * (hold * 12)
+    cf[-1] += sale_net
+    sheet = {
+        "Purchase Price":        pp,
+        "Rehab Cost":            rehab,
+        "Closing Costs (buy)":   pp * closing_pct,
+        "Initial Investment":    init,
+        "Monthly Rent":          rent,
+        "Operating Expenses":    exp,
+        "Debt Service (mo)":     pay,
+        "Monthly Net Cash":      mon,
+        "Total Rental CF":       total_rent,
+        "Sale Price":            sale,
+        "Net Sale Proceeds":     sale_net,
+        "Profit":                total_rent + sale_net,
+    }
+    coc, ann_roi, irr = build_metrics(sheet, cf, hold)
+    return cf, sheet, coc, ann_roi, irr
 
+# mapping
 # ───────────────────────────────────────────────────────────
-# 4 ▸ CALCULATE & DISPLAY
+# 5 ▸ CALCULATE RESULTS
 # ───────────────────────────────────────────────────────────
+calc_map = {
+    "Subject-To": subject_cf,
+    "Conventional": conventional_cf,
+    "Seller Financing": seller_fin_cf,
+    "BRRRR": brrrr_cf,
+}
+
 summary_rows = []
 net_sheets   = []
 
 for idx, cfg in enumerate(deal_configs, 1):
-    cf, sheet = calc_map[cfg['type']](cfg)
-    irr = nf.irr(cf) if cf else 0
-    npv = nf.npv(cfg['dr'], cf) if cf else 0
+    cf, sheet, coc, ann_roi, irr = calc_map[cfg["type"]](cfg)
+    # use custom name
+    deal_label = cfg.get("name", f"Deal {idx}")
+    total_roi = sheet["Profit"] / sheet["Initial Investment"] if sheet["Initial Investment"] else 0
     summary_rows.append({
-        "Deal": f"Deal {idx} ({cfg['type']})",
+        "Deal":               deal_label,
+        "Type":               cfg["type"],
         "Initial Investment": sheet["Initial Investment"],
-        "IRR": irr,
-        "NPV": npv,
-        "Cash Profit": sheet["Profit"]
+        "IRR":                irr,
+        "Annual ROI":         ann_roi,
+        "Total ROI":          total_roi,
+        "Cash Profit":        sheet["Profit"],
     })
-    net_sheets.append((f"Deal {idx} ({cfg['type']})", sheet))
+    net_sheets.append((deal_label, sheet))
 
 # ───────────────────────────────────────────────────────────
-# 5 ▸ SUMMARY & VISUALS
+# 6 ▸ DISPLAY SUMMARY & NET‑SHEETS
 # ───────────────────────────────────────────────────────────
+summary_df = pd.DataFrame(summary_rows).set_index("Deal")
 
 st.subheader("📊 Summary Metrics")
-summary_df = pd.DataFrame(summary_rows).set_index("Deal")
 st.dataframe(
     summary_df.style.format({
         "Initial Investment": "${:,.0f}",
-        "IRR": "{:.2%}",
-        "NPV": "${:,.0f}",
-        "Cash Profit": "${:,.0f}",
+        "IRR":                "{:.2%}",
+        "Annual ROI":         "{:.2%}",
+        "Total ROI":          "{:.2%}",
+        "Cash Profit":        "${:,.0f}",
     })
 )
 
-# Charts
-irr_series    = summary_df["IRR"]
-profit_series = summary_df["Cash Profit"]
-
-c1, c2 = st.columns(2)
-with c1:
-    st.subheader("IRR Comparison")
-    st.bar_chart(irr_series)
-with c2:
-    st.subheader("Cash Profit Comparison")
-    st.bar_chart(profit_series)
-
-# ───────────────────────────────────────────────────────────
-# 6 ▸ NET‑SHEET DETAILS
-# ───────────────────────────────────────────────────────────
+st.subheader("Charts")
+col1, col2 = st.columns(2)
+with col1:
+    st.bar_chart(summary_df["IRR"])
+with col2:
+    st.bar_chart(summary_df["Cash Profit"])
 
 st.subheader("🧾 Net‑Sheet Details")
 for title, sheet in net_sheets:
     with st.expander(title):
+        # Debug: show raw sheet values
+        st.markdown("**Debug: Net-Sheet Data**")
+        st.json(sheet)
+        # Display formatted table
         st.table(
-            pd.DataFrame(sheet.items(), columns=["Line Item", "Amount ($)"])
-              .set_index("Line Item")
+            pd.DataFrame(sheet.items(), columns=["Line Item", "Amount"])  
+              .set_index("Line Item")  
               .style.format("${:,.0f}")
         )
