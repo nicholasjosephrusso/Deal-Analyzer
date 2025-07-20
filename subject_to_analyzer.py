@@ -36,8 +36,9 @@ for i in range(int(num_deals)):
         dr    = st.slider("Discount Rate %", 0.00, 0.20, 0.08, 0.005, key=f"dr{i}")
         params = {"name": name, "type": dtype, "pp": pp, "hold": hold, "gr": gr, "dr": dr}
         if dtype == "Subject-To":
+            eb_default = min(pp, 200000.0)
             params.update({
-                "eb":      st.number_input("Existing Loan Balance", 0.0, pp, 200000.0, 10000.0, key=f"eb{i}"),
+                "eb":      st.number_input("Existing Loan Balance", 0.0, pp, eb_default, 10000.0, key=f"eb{i}"),
                 "rate":    st.slider("Subject Loan Rate", 0.01, 0.08, 0.035, 0.001, key=f"sr{i}"),
                 "term":    st.slider("Loan Term Remaining (yrs)", 1, 30, 25, key=f"tr{i}"),
                 "premium": st.number_input("Premium to Seller", 0.0, 1e6, 10000.0, 1000.0, key=f"prem{i}")
