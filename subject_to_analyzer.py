@@ -106,7 +106,10 @@ def subject_cf(p):
         "Existing Balance":    eb,
         "Premium Paid":        prem,
         "Closing Costs":       pp * closing_pct,
-        "Initial Equity":      (pp - eb) + prem + pp * closing_pct,
+        # For a typical subject-to deal the buyer only pays any negotiated
+        # premium to the seller plus closing costs. The purchase price minus
+        # the existing balance is not an additional cash requirement.
+        "Initial Equity":      prem + pp * closing_pct,
         "Total Interest Paid": interest_total,
         "Monthly Rent":        f"Starts {market_rent:.0f}, grows {rent_growth:.2%}/yr",
         "Operating Expenses":  f"Starts {oper_exp:.0f}, grows w/ rent",
