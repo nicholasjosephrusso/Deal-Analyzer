@@ -11,7 +11,7 @@ st.title("🏠 Real Estate Deal Analyzer – Net-Sheet Edition (v8)")
 with st.sidebar:
     st.header("Global Assumptions")
     market_rent   = st.number_input("Market Rent ($/mo)",  0.0, 1e6, 2000.0, 50.0)
-    rent_growth   = st.slider("Annual Rent Growth %", 0.00, 0.10, 0.02, 0.005)  # new rent growth assumption ($/mo)",  0.0, 1e6, 2000.0, 50.0)
+    rent_growth   = st.slider("Annual Rent Growth %", 0.00, 0.10, 0.02, 0.005)  # annual rent growth percentage
     expense_ratio = st.slider("Operating Expense Ratio", 0.00, 1.00, 0.35, 0.01)
     market_rate   = st.slider("Market Mortgage Rate",    0.01, 0.10, 0.05, 0.001)
     market_term   = st.slider("Mortgage Term (yrs)",    10,   30,   30)
@@ -81,7 +81,8 @@ def build_cashflow_and_sheet(p):
     return brrrr_cf(p)
 
 def build_metrics(initial_equity, cf):
-    irr = nf.irr([-initial_equity] + cf)
+    monthly_irr = nf.irr([-initial_equity] + cf)
+    irr = (1 + monthly_irr) ** 12 - 1
     total_roi = sum(cf) / initial_equity if initial_equity else 0
     return irr, total_roi
 
