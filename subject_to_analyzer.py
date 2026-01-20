@@ -13,8 +13,6 @@ with st.sidebar:
     market_rent   = st.number_input("Market Rent ($/mo)",  0.0, 1e6, 2000.0, 50.0)
     rent_growth   = st.slider("Annual Rent Growth %", 0.00, 0.10, 0.02, 0.005)  # annual rent growth percentage
     expense_ratio = st.slider("Operating Expense Ratio", 0.00, 1.00, 0.35, 0.01)
-    market_rate   = st.slider("Market Mortgage Rate",    0.01, 0.10, 0.05, 0.001)
-    market_term   = st.slider("Mortgage Term (yrs)",    10,   30,   30)
     closing_pct   = st.slider("Closing Cost % (buy & sell)", 0.00, 0.10, 0.06, 0.005)
     show_debug    = st.checkbox("Show Debug Data in Net-Sheet", value=False)
 
@@ -65,30 +63,98 @@ for i in range(int(num_deals)):
         deal_configs.append(params)
 
 # --- 3. Helpers -----------------------------------------------------
-def amortize(balance, rate_mo, payment, periods):
-    bal = balance
-    for _ in range(periods):
-        bal -= (payment - bal * rate_mo)
-    return bal
+
+def validate_deal(p: dict) -> list[str]:
+    """Validate deal parameters and return list of warning messages."""
+    warnings = []
+    dtype = p['type']
+
+    if dtype == "Subject-To":
+        if p['eb'] <= 0:
+            warnings.append(f"{p['name']}: Existing balance must be positive")
+        if p['premium'] < 0:
+            warnings.append(f"{p['name']}: Premium cannot be negative")
+        initial_equity = p['premium'] + p['pp'] * closing_pct
+        if initial_equity <= 0:
+            warnings.append(f"{p['name']}: Initial equity must be positive")
+
+    elif dtype == "Conventional":
+        if p['dp_pct'] <= 0:
+            warnings.append(f"{p['name']}: Down payment must be positive")
+        initial_equity = p['pp'] * p['dp_pct'] + p['pp'] * closing_pct
+        if initial_equity <= 0:
+            warnings.append(f"{p['name']}: Initial equity must be positive")
+
+    elif dtype == "Seller Financing":
+        if p['fin_pct'] < 0 or p['fin_pct'] > 1:
+            warnings.append(f"{p['name']}: Financed percentage must be between 0 and 100%")
+        initial_equity = p['pp'] * (1 - p['fin_pct']) + p['pp'] * closing_pct
+        if initial_equity <= 0:
+            warnings.append(f"{p['name']}: Initial equity must be positive")
+
+    elif dtype == "BRRRR":
+        if p['arv'] <= p['pp']:
+            warnings.append(f"{p['name']}: After-repair value should exceed purchase price")
+        cost = p['pp'] + p['rehab'] + p['pp'] * closing_pct
+        loan = p['arv'] * p['rlv']
+        if cost - loan <= 0:
+            warnings.append(f"{p['name']}: Refi loan exceeds total cost - may result in infinite/negative equity")
+
+    return warnings
 
 # Dispatch and metrics
 
-def build_cashflow_and_sheet(p):
+def build_cashflow_and_sheet(p: dict) -> tuple[list[float], dict]:
+    """
+    Route deal parameters to the appropriate cashflow calculation function.
+
+    Args:
+        p: Deal parameters dictionary containing 'type' and type-specific params
+
+    Returns:
+        Tuple of (monthly cashflows list, net-sheet dictionary)
+    """
     tp = p['type']
     if tp == "Subject-To": return subject_cf(p)
     if tp == "Conventional": return conventional_cf(p)
     if tp == "Seller Financing": return seller_fin_cf(p)
     return brrrr_cf(p)
 
-def build_metrics(initial_equity, cf):
+def build_metrics(initial_equity: float, cf: list[float], discount_rate: float = 0.08) -> tuple[float, float, float]:
+    """
+    Calculate investment metrics from cash flows.
+
+    Args:
+        initial_equity: Initial cash investment
+        cf: List of monthly cash flows
+        discount_rate: Annual discount rate for NPV calculation
+
+    Returns:
+        Tuple of (annualized IRR, total ROI, NPV)
+    """
     monthly_irr = nf.irr([-initial_equity] + cf)
     irr = (1 + monthly_irr) ** 12 - 1
     total_roi = sum(cf) / initial_equity if initial_equity else 0
-    return irr, total_roi
+    # Calculate NPV using monthly discount rate
+    monthly_dr = (1 + discount_rate) ** (1/12) - 1
+    npv = nf.npv(monthly_dr, [-initial_equity] + cf)
+    return irr, total_roi, npv
 
 # --- 4. Deal Models with Interest Tracking -------------------------
 
-def subject_cf(p):
+def subject_cf(p: dict) -> tuple[list[float], dict]:
+    """
+    Calculate cashflows for a Subject-To deal.
+
+    In a Subject-To deal, the buyer takes over payments on the seller's
+    existing mortgage without formally assuming the loan.
+
+    Args:
+        p: Deal parameters including pp, eb, rate, term, premium, hold, gr
+
+    Returns:
+        Tuple of (monthly cashflows, net-sheet dictionary)
+    """
     pp, eb, rate, term, prem, hold = p['pp'], p['eb'], p['rate'], p['term'], p['premium'], p['hold']
     mrate = rate/12; periods = term*12
     payment = nf.pmt(mrate, periods, -eb)
@@ -124,7 +190,18 @@ def subject_cf(p):
     }
     return cf, sheet
 
-def conventional_cf(p):
+def conventional_cf(p: dict) -> tuple[list[float], dict]:
+    """
+    Calculate cashflows for a Conventional financing deal.
+
+    Standard mortgage financing with down payment and fixed-rate loan.
+
+    Args:
+        p: Deal parameters including pp, dp_pct, rate, term, hold, gr
+
+    Returns:
+        Tuple of (monthly cashflows, net-sheet dictionary)
+    """
     pp, dp, rate, term, hold = p['pp'], p['dp_pct'], p['rate'], p['term'], p['hold']
     down = pp*dp; loan = pp-down
     payment = nf.pmt(rate/12, term*12, -loan)
@@ -157,7 +234,18 @@ def conventional_cf(p):
     }
     return cf, sheet
 
-def seller_fin_cf(p):
+def seller_fin_cf(p: dict) -> tuple[list[float], dict]:
+    """
+    Calculate cashflows for a Seller Financing deal.
+
+    The seller acts as the lender, financing a portion of the purchase price.
+
+    Args:
+        p: Deal parameters including pp, fin_pct, rate, term, hold, gr
+
+    Returns:
+        Tuple of (monthly cashflows, net-sheet dictionary)
+    """
     pp, fp, rate, term, hold = p['pp'], p['fin_pct'], p['rate'], p['term'], p['hold']
     financed = pp*fp; payment = nf.pmt(rate/12, term*12, -financed)
     bal=financed; interest_total=0; cf=[]
@@ -188,7 +276,19 @@ def seller_fin_cf(p):
     }
     return cf, sheet
 
-def brrrr_cf(p):
+def brrrr_cf(p: dict) -> tuple[list[float], dict]:
+    """
+    Calculate cashflows for a BRRRR (Buy, Rehab, Rent, Refinance, Repeat) deal.
+
+    Strategy involves buying below market, rehabbing to increase value,
+    then refinancing to pull out initial capital.
+
+    Args:
+        p: Deal parameters including pp, rehab, arv, rr, rlv, hold, gr
+
+    Returns:
+        Tuple of (monthly cashflows, net-sheet dictionary)
+    """
     pp, rehab, arv, rr, rlv, hold = p['pp'], p['rehab'], p['arv'], p['rr'], p['rlv'], p['hold']
     cost = pp+rehab+pp*closing_pct; loan=arv*rlv; payment=nf.pmt(rr/12,hold*12,-loan)
     bal=loan; interest_total=0; cf=[]
@@ -224,17 +324,26 @@ def brrrr_cf(p):
     return cf, sheet
 
 # --- 5. Side-by-Side Deal Cards with Inline Net-Sheets -----------
+
+# Display validation warnings
+all_warnings = []
+for cfg in deal_configs:
+    all_warnings.extend(validate_deal(cfg))
+if all_warnings:
+    for warning in all_warnings:
+        st.warning(warning)
+
 cols = st.columns(int(num_deals))
 for col, cfg in zip(cols, deal_configs):
     cf, sheet = build_cashflow_and_sheet(cfg)
     initial_equity = sheet["Initial Equity"]
-    irr, total_roi = build_metrics(initial_equity, cf)
+    irr, total_roi, npv = build_metrics(initial_equity, cf, cfg['dr'])
     df_cf = pd.DataFrame({"Month": list(range(len(cf))), "Cash Flow ($)": cf})
     with col:
         st.subheader(cfg['name'])
         st.metric("IRR", f"{irr:.2%}")
         st.metric("Total ROI", f"{total_roi:.2%}")
-        # (Monthly cash flow chart removed)
+        st.metric("NPV", f"${npv:,.0f}")
         with st.expander("Net-Sheet Details", expanded=False):
             if show_debug:
                 st.json(sheet)
@@ -270,13 +379,22 @@ labels = []
 for cfg in deal_configs:
     name = cfg['name']
     hold_mo = cfg['hold'] * 12
-    # end of rental period (month before sale)
-    end_rent_month = hold_mo - 2
+    # sale month is the last month (index hold_mo - 1 since 0-indexed)
     sale_month = hold_mo - 1
-    val_rent = cum_df.loc[cum_df['Month'] == end_rent_month, name].iloc[0]
-    val_sale = cum_df.loc[cum_df['Month'] == sale_month, name].iloc[0]
-    labels.append({'Deal': name, 'Month': end_rent_month, 'Cumulative CF': val_rent, 'Label': 'End Rent'})
-    labels.append({'Deal': name, 'Month': sale_month,      'Cumulative CF': val_sale, 'Label': 'With Sale'})
+    # end of rental period is penultimate month, but ensure it's at least 0
+    end_rent_month = max(0, hold_mo - 2)
+
+    # Safely get values, handling potential missing data
+    rent_rows = cum_df.loc[cum_df['Month'] == end_rent_month, name]
+    sale_rows = cum_df.loc[cum_df['Month'] == sale_month, name]
+
+    if not rent_rows.empty and not pd.isna(rent_rows.iloc[0]):
+        val_rent = rent_rows.iloc[0]
+        labels.append({'Deal': name, 'Month': end_rent_month, 'Cumulative CF': val_rent, 'Label': 'End Rent'})
+
+    if not sale_rows.empty and not pd.isna(sale_rows.iloc[0]):
+        val_sale = sale_rows.iloc[0]
+        labels.append({'Deal': name, 'Month': sale_month, 'Cumulative CF': val_sale, 'Label': 'With Sale'})
 labels_df = pd.DataFrame(labels)
 
 text = alt.Chart(labels_df).mark_text(dx=5, dy=-5).encode(
