@@ -4,22 +4,35 @@ import numpy as np
 import numpy_financial as nf
 import altair as alt
 
-st.set_page_config(page_title="Real Estate Deal Analyzer v8", layout="wide")
-st.title("🏠 Real Estate Deal Analyzer – Net-Sheet Edition (v8)")
+st.set_page_config(page_title="Real Estate Deal Analyzer v9", layout="wide")
+st.title("🏠 Real Estate Deal Analyzer – Rental Strategy Edition (v9)")
 
 # --- 1. Global Assumptions -----------------------------------------
 with st.sidebar:
     st.header("Global Assumptions")
-    market_rent   = st.number_input("Market Rent ($/mo)",  0.0, 1e6, 2000.0, 50.0)
-    rent_growth   = st.slider("Annual Rent Growth %", 0.00, 0.10, 0.02, 0.005)  # annual rent growth percentage
-    expense_ratio = st.slider("Operating Expense Ratio", 0.00, 1.00, 0.35, 0.01)
     closing_pct   = st.slider("Closing Cost % (buy & sell)", 0.00, 0.10, 0.06, 0.005)
     show_debug    = st.checkbox("Show Debug Data in Net-Sheet", value=False)
 
-oper_exp = market_rent * expense_ratio  # monthly operating expenses
+    st.subheader("Long-Term Rental (LTR)")
+    ltr_rent      = st.number_input("LTR Monthly Rent ($)", 0.0, 1e6, 2000.0, 50.0)
+    ltr_growth    = st.slider("LTR Annual Rent Growth %", 0.00, 0.10, 0.02, 0.005)
+    ltr_expense   = st.slider("LTR Expense Ratio", 0.00, 1.00, 0.35, 0.01)
+    ltr_vacancy   = st.slider("LTR Vacancy Rate %", 0.00, 0.20, 0.05, 0.01)
+
+    st.subheader("Short-Term Rental (STR)")
+    str_nightly   = st.number_input("STR Nightly Rate ($)", 0.0, 2000.0, 150.0, 10.0)
+    str_occupancy = st.slider("STR Occupancy Rate %", 0.00, 1.00, 0.65, 0.01)
+    str_growth    = st.slider("STR Annual Rate Growth %", 0.00, 0.15, 0.03, 0.005)
+    str_expense   = st.slider("STR Expense Ratio", 0.00, 1.00, 0.50, 0.01)
+
+# Backward compatibility
+market_rent = ltr_rent
+rent_growth = ltr_growth
+oper_exp = ltr_rent * ltr_expense
 
 # --- 2. Deal Inputs ------------------------------------------------
 DEAL_TYPES = ["Subject-To","Conventional","Seller Financing","BRRRR"]
+RENTAL_STRATEGIES = ["LTR", "STR", "Hybrid"]
 num_deals = st.sidebar.number_input("# Deals to Compare", 1, 4, 2)
 
 deal_configs = []
@@ -27,12 +40,22 @@ for i in range(int(num_deals)):
     with st.sidebar:
         st.markdown("---")
         name  = st.text_input(f"Deal {i+1} Name", value=f"Deal {i+1}", key=f"name{i}")
-        dtype = st.selectbox("Type", DEAL_TYPES, key=f"type{i}")
+        dtype = st.selectbox("Financing Type", DEAL_TYPES, key=f"type{i}")
+        rental_strategy = st.selectbox("Rental Strategy", RENTAL_STRATEGIES, key=f"rental{i}")
         pp    = st.number_input("Purchase Price", 0.0, 1e7, 300000.0, 10000.0, key=f"pp{i}")
         hold  = st.slider("Holding Period (yrs)", 1, 30, 10, key=f"hold{i}")
         gr    = st.slider("Annual Appreciation %", 0.00, 0.10, 0.04, 0.005, key=f"gr{i}")
         dr    = st.slider("Discount Rate %", 0.00, 0.20, 0.08, 0.005, key=f"dr{i}")
-        params = {"name": name, "type": dtype, "pp": pp, "hold": hold, "gr": gr, "dr": dr}
+
+        # Hybrid-specific parameters
+        if rental_strategy == "Hybrid":
+            str_months = st.slider("STR Months per Year", 1, 11, 4, key=f"strmo{i}",
+                                   help="Number of months operated as STR (peak season)")
+        else:
+            str_months = 0
+
+        params = {"name": name, "type": dtype, "pp": pp, "hold": hold, "gr": gr, "dr": dr,
+                  "rental_strategy": rental_strategy, "str_months": str_months}
         if dtype == "Subject-To":
             eb_default = min(pp, 200000.0)
             params.update({
@@ -64,10 +87,112 @@ for i in range(int(num_deals)):
 
 # --- 3. Helpers -----------------------------------------------------
 
+def calculate_rental_income(strategy: str, month: int, year: int, str_months: int = 0) -> tuple[float, float]:
+    """
+    Calculate monthly gross rental income and expenses based on rental strategy.
+
+    Args:
+        strategy: 'LTR', 'STR', or 'Hybrid'
+        month: Month number (1-12 within the year, for seasonal calculations)
+        year: Year number (0-indexed) for growth calculations
+        str_months: For Hybrid strategy, number of months operated as STR
+
+    Returns:
+        Tuple of (gross_income, expenses) for the month
+    """
+    if strategy == "LTR":
+        # Long-term rental: stable monthly rent with vacancy factor
+        base_rent = ltr_rent * (1 + ltr_growth) ** year
+        gross = base_rent * (1 - ltr_vacancy)
+        expenses = base_rent * ltr_expense
+        return gross, expenses
+
+    elif strategy == "STR":
+        # Short-term rental: nightly rate × days × occupancy
+        base_rate = str_nightly * (1 + str_growth) ** year
+        days_in_month = 30  # Simplified
+        gross = base_rate * days_in_month * str_occupancy
+        expenses = gross * str_expense
+        return gross, expenses
+
+    else:  # Hybrid
+        # Operate as STR for str_months, LTR for remaining months
+        # Assume STR months are months 1-str_months (e.g., peak season)
+        month_in_year = ((month - 1) % 12) + 1  # 1-12
+
+        if month_in_year <= str_months:
+            # STR month
+            base_rate = str_nightly * (1 + str_growth) ** year
+            days_in_month = 30
+            gross = base_rate * days_in_month * str_occupancy
+            expenses = gross * str_expense
+        else:
+            # LTR month
+            base_rent = ltr_rent * (1 + ltr_growth) ** year
+            gross = base_rent * (1 - ltr_vacancy)
+            expenses = base_rent * ltr_expense
+
+        return gross, expenses
+
+
+def get_rental_description(strategy: str, str_months: int = 0) -> dict:
+    """
+    Generate description strings for rental income display in net-sheet.
+
+    Args:
+        strategy: 'LTR', 'STR', or 'Hybrid'
+        str_months: For Hybrid, number of STR months
+
+    Returns:
+        Dictionary with description strings for the net-sheet
+    """
+    if strategy == "LTR":
+        return {
+            "Rental Strategy": "Long-Term Rental (LTR)",
+            "Monthly Income": f"${ltr_rent:,.0f}/mo (grows {ltr_growth:.1%}/yr)",
+            "Vacancy Rate": f"{ltr_vacancy:.0%}",
+            "Expense Ratio": f"{ltr_expense:.0%}",
+        }
+    elif strategy == "STR":
+        monthly_gross = str_nightly * 30 * str_occupancy
+        return {
+            "Rental Strategy": "Short-Term Rental (STR)",
+            "Nightly Rate": f"${str_nightly:,.0f} (grows {str_growth:.1%}/yr)",
+            "Occupancy Rate": f"{str_occupancy:.0%}",
+            "Est. Monthly Gross": f"${monthly_gross:,.0f}",
+            "Expense Ratio": f"{str_expense:.0%}",
+        }
+    else:  # Hybrid
+        ltr_months = 12 - str_months
+        str_monthly = str_nightly * 30 * str_occupancy
+        return {
+            "Rental Strategy": f"Hybrid ({str_months}mo STR / {ltr_months}mo LTR)",
+            "STR Nightly Rate": f"${str_nightly:,.0f}",
+            "STR Occupancy": f"{str_occupancy:.0%}",
+            "LTR Monthly Rent": f"${ltr_rent:,.0f}",
+            "LTR Vacancy": f"{ltr_vacancy:.0%}",
+        }
+
+
 def validate_deal(p: dict) -> list[str]:
     """Validate deal parameters and return list of warning messages."""
     warnings = []
     dtype = p['type']
+    strategy = p.get('rental_strategy', 'LTR')
+
+    # Validate rental strategy parameters
+    if strategy == "STR":
+        if str_nightly <= 0:
+            warnings.append(f"{p['name']}: STR nightly rate must be positive")
+        if str_occupancy <= 0:
+            warnings.append(f"{p['name']}: STR occupancy rate must be positive")
+        # Check if STR income covers typical mortgage
+        estimated_monthly = str_nightly * 30 * str_occupancy * (1 - str_expense)
+        if estimated_monthly < 500:
+            warnings.append(f"{p['name']}: STR net income (${estimated_monthly:.0f}/mo) may be too low")
+    elif strategy == "Hybrid":
+        if p['str_months'] < 1 or p['str_months'] > 11:
+            warnings.append(f"{p['name']}: Hybrid STR months must be between 1 and 11")
 
     if dtype == "Subject-To":
         if p['eb'] <= 0:
@@ -150,39 +275,38 @@ def subject_cf(p: dict) -> tuple[list[float], dict]:
     existing mortgage without formally assuming the loan.
 
     Args:
-        p: Deal parameters including pp, eb, rate, term, premium, hold, gr
+        p: Deal parameters including pp, eb, rate, term, premium, hold, gr, rental_strategy
 
     Returns:
         Tuple of (monthly cashflows, net-sheet dictionary)
     """
     pp, eb, rate, term, prem, hold = p['pp'], p['eb'], p['rate'], p['term'], p['premium'], p['hold']
+    strategy, str_months = p['rental_strategy'], p['str_months']
     mrate = rate/12; periods = term*12
     payment = nf.pmt(mrate, periods, -eb)
     bal = eb; interest_total = 0; cf = []
     for m in range(1, hold*12+1):
         year = (m-1)//12
-        rent = market_rent * (1 + rent_growth)**year
-        exp = oper_exp * (1 + rent_growth)**year
+        gross, exp = calculate_rental_income(strategy, m, year, str_months)
         interest = bal * mrate; principal = payment - interest; bal -= principal
         interest_total += interest
-        cf.append(rent - exp - payment)
+        cf.append(gross - exp - payment)
     sale_price = pp * (1 + p['gr'])**hold
     sale_net = sale_price - sale_price * closing_pct - bal; cf[-1] += sale_net
     total_rent = sum(cf[:-1])
+
+    # Build net-sheet with rental strategy info
+    rental_info = get_rental_description(strategy, str_months)
     sheet = {
         "Purchase Price":      pp,
         "Existing Balance":    eb,
         "Premium Paid":        prem,
         "Closing Costs":       pp * closing_pct,
-        # For a typical subject-to deal the buyer only pays any negotiated
-        # premium to the seller plus closing costs. The purchase price minus
-        # the existing balance is not an additional cash requirement.
         "Initial Equity":      prem + pp * closing_pct,
-        "Total Interest Paid": interest_total,
-        "Monthly Rent":        f"Starts {market_rent:.0f}, grows {rent_growth:.2%}/yr",
-        "Operating Expenses":  f"Starts {oper_exp:.0f}, grows w/ rent",
+        **rental_info,
         "Debt Service (mo)":   payment,
-        "Monthly Net Cash":    cf[0],
+        "Total Interest Paid": interest_total,
+        "Monthly Net Cash (M1)": cf[0],
         "Total Rental CF":     total_rent,
         "Sale Price":          sale_price,
         "Net Sale Proceeds":   sale_net,
@@ -197,36 +321,37 @@ def conventional_cf(p: dict) -> tuple[list[float], dict]:
     Standard mortgage financing with down payment and fixed-rate loan.
 
     Args:
-        p: Deal parameters including pp, dp_pct, rate, term, hold, gr
+        p: Deal parameters including pp, dp_pct, rate, term, hold, gr, rental_strategy
 
     Returns:
         Tuple of (monthly cashflows, net-sheet dictionary)
     """
     pp, dp, rate, term, hold = p['pp'], p['dp_pct'], p['rate'], p['term'], p['hold']
+    strategy, str_months = p['rental_strategy'], p['str_months']
     down = pp*dp; loan = pp-down
     payment = nf.pmt(rate/12, term*12, -loan)
     bal = loan; interest_total=0; cf=[]
     for m in range(1, hold*12+1):
         year = (m-1)//12
-        rent = market_rent * (1 + rent_growth)**year
-        exp = oper_exp * (1 + rent_growth)**year
+        gross, exp = calculate_rental_income(strategy, m, year, str_months)
         interest = bal * (rate/12); principal = payment - interest; bal -= principal
         interest_total += interest
-        cf.append(rent - exp - payment)
+        cf.append(gross - exp - payment)
     sale_price = pp * (1 + p['gr'])**hold
     sale_net = sale_price - sale_price * closing_pct - bal; cf[-1] += sale_net
     total_rent = sum(cf[:-1])
+
+    rental_info = get_rental_description(strategy, str_months)
     sheet = {
         "Purchase Price":      pp,
         "Down Payment":        down,
         "Loan Amount":         loan,
         "Closing Costs":       pp * closing_pct,
         "Initial Equity":      down + pp * closing_pct,
-        "Total Interest Paid": interest_total,
-        "Monthly Rent":        f"Starts {market_rent:.0f}, grows {rent_growth:.2%}/yr",
-        "Operating Expenses":  f"Starts {oper_exp:.0f}, grows w/ rent",
+        **rental_info,
         "Debt Service (mo)":   payment,
-        "Monthly Net Cash":    cf[0],
+        "Total Interest Paid": interest_total,
+        "Monthly Net Cash (M1)": cf[0],
         "Total Rental CF":     total_rent,
         "Sale Price":          sale_price,
         "Net Sale Proceeds":   sale_net,
@@ -241,34 +366,35 @@ def seller_fin_cf(p: dict) -> tuple[list[float], dict]:
     The seller acts as the lender, financing a portion of the purchase price.
 
     Args:
-        p: Deal parameters including pp, fin_pct, rate, term, hold, gr
+        p: Deal parameters including pp, fin_pct, rate, term, hold, gr, rental_strategy
 
     Returns:
         Tuple of (monthly cashflows, net-sheet dictionary)
     """
     pp, fp, rate, term, hold = p['pp'], p['fin_pct'], p['rate'], p['term'], p['hold']
+    strategy, str_months = p['rental_strategy'], p['str_months']
     financed = pp*fp; payment = nf.pmt(rate/12, term*12, -financed)
     bal=financed; interest_total=0; cf=[]
     for m in range(1, hold*12+1):
         year = (m-1)//12
-        rent = market_rent * (1 + rent_growth)**year
-        exp = oper_exp * (1 + rent_growth)**year
+        gross, exp = calculate_rental_income(strategy, m, year, str_months)
         interest = bal*(rate/12); principal = payment-interest; bal-=principal
         interest_total += interest
-        cf.append(rent - exp - payment)
+        cf.append(gross - exp - payment)
     sale_price = pp * (1 + p['gr'])**hold
     sale_net = sale_price - sale_price * closing_pct - bal; cf[-1]+=sale_net
     total_rent = sum(cf[:-1])
+
+    rental_info = get_rental_description(strategy, str_months)
     sheet = {
         "Purchase Price":      pp,
         "Financed Amount":     financed,
         "Closing Costs":       pp * closing_pct,
         "Initial Equity":      pp - financed + pp * closing_pct,
-        "Total Interest Paid": interest_total,
-        "Monthly Rent":        f"Starts {market_rent:.0f}, grows {rent_growth:.2%}/yr",
-        "Operating Expenses":  f"Starts {oper_exp:.0f}, grows w/ rent",
+        **rental_info,
         "Debt Service (mo)":   payment,
-        "Monthly Net Cash":    cf[0],
+        "Total Interest Paid": interest_total,
+        "Monthly Net Cash (M1)": cf[0],
         "Total Rental CF":     total_rent,
         "Sale Price":          sale_price,
         "Net Sale Proceeds":   sale_net,
@@ -284,26 +410,28 @@ def brrrr_cf(p: dict) -> tuple[list[float], dict]:
     then refinancing to pull out initial capital.
 
     Args:
-        p: Deal parameters including pp, rehab, arv, rr, rlv, hold, gr
+        p: Deal parameters including pp, rehab, arv, rr, rlv, hold, gr, rental_strategy
 
     Returns:
         Tuple of (monthly cashflows, net-sheet dictionary)
     """
     pp, rehab, arv, rr, rlv, hold = p['pp'], p['rehab'], p['arv'], p['rr'], p['rlv'], p['hold']
+    strategy, str_months = p['rental_strategy'], p['str_months']
     cost = pp+rehab+pp*closing_pct; loan=arv*rlv; payment=nf.pmt(rr/12,hold*12,-loan)
     bal=loan; interest_total=0; cf=[]
     for m in range(1, hold*12+1):
         year = (m-1)//12
-        rent = market_rent * (1 + rent_growth)**year
-        exp = oper_exp * (1 + rent_growth)**year
+        gross, exp = calculate_rental_income(strategy, m, year, str_months)
         interest=bal*(rr/12); principal=payment-interest; bal-=principal
         interest_total+=interest
-        val = rent-exp-payment
+        val = gross-exp-payment
         if m == 12:
             val += loan   # cash-out proceeds at refinance
         cf.append(val)
     sale_price = arv*(1+p['gr'])**hold; sale_net = sale_price - sale_price*closing_pct - bal; cf[-1]+=sale_net
     total_rent = sum(cf[:-1])
+
+    rental_info = get_rental_description(strategy, str_months)
     sheet = {
         "Purchase Price":      pp,
         "Rehab Cost":          rehab,
@@ -311,11 +439,10 @@ def brrrr_cf(p: dict) -> tuple[list[float], dict]:
         "Cash-Out Proceeds":   loan,
         "Closing Costs":       pp * closing_pct,
         "Initial Equity":      cost - loan,
-        "Total Interest Paid": interest_total,
-        "Monthly Rent":        f"Starts {market_rent:.0f}, grows {rent_growth:.2%}/yr",
-        "Operating Expenses":  f"Starts {oper_exp:.0f}, grows w/ rent",
+        **rental_info,
         "Debt Service (mo)":   payment,
-        "Monthly Net Cash":    cf[0],
+        "Total Interest Paid": interest_total,
+        "Monthly Net Cash (M1)": cf[0],
         "Total Rental CF":     total_rent,
         "Sale Price":          sale_price,
         "Net Sale Proceeds":   sale_net,
