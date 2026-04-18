@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0a3a24"/>
+  <g transform="translate(96 96)">
+    <rect x="0" y="0" width="200" height="280" rx="16" fill="#ffffff" stroke="#000" stroke-width="4"/>
+    <text x="100" y="160" font-family="-apple-system, Segoe UI, sans-serif" font-size="120" font-weight="800" text-anchor="middle" fill="#c0392b">A♥</text>
+  </g>
+  <g transform="translate(220 160) rotate(12)">
+    <rect x="0" y="0" width="200" height="280" rx="16" fill="#ffffff" stroke="#000" stroke-width="4"/>
+    <text x="100" y="160" font-family="-apple-system, Segoe UI, sans-serif" font-size="120" font-weight="800" text-anchor="middle" fill="#111">K♠</text>
+  </g>
+</svg>

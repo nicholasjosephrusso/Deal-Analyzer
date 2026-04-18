@@ -30,3 +30,14 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/tsconfig.tsbuildinfo
+frontend/next-env.d.ts
+
+# Backend
+backend/__pycache__/
