@@ -182,7 +182,7 @@ else:
     current_state = GameState.from_deal(deal)
 
 st.markdown(render_board(current_state), unsafe_allow_html=True)
-st.markdown("<div style='height:64px;'></div>", unsafe_allow_html=True)
+st.markdown("<div style='height:18px;'></div>", unsafe_allow_html=True)
 
 if solution is None:
     st.info("Click **Solve** in the sidebar.")
@@ -198,21 +198,23 @@ else:
         f"{solution.node_count:,} nodes searched, {n} moves in solution."
     )
 
-    cols = st.columns([1, 1, 1, 1, 2])
-    if cols[0].button("\u23EE Reset", use_container_width=True):
+    # Buttons stacked on mobile: four short labels fit a narrow row.
+    bcols = st.columns(4)
+    if bcols[0].button("\u23EE", help="Reset", use_container_width=True):
         st.session_state.step = 0
         st.rerun()
-    if cols[1].button("\u25C0 Prev", use_container_width=True, disabled=step == 0):
+    if bcols[1].button("\u25C0 Prev", use_container_width=True, disabled=step == 0):
         st.session_state.step = max(0, step - 1)
         st.rerun()
-    if cols[2].button("Next \u25B6", use_container_width=True, disabled=step >= n):
+    if bcols[2].button("Next \u25B6", use_container_width=True, disabled=step >= n):
         st.session_state.step = min(n, step + 1)
         st.rerun()
-    if cols[3].button("\u23ED Final", use_container_width=True):
+    if bcols[3].button("\u23ED", help="Jump to final step", use_container_width=True):
         st.session_state.step = n
         st.rerun()
 
-    new_step = cols[4].slider(
+    # Slider on its own row so it gets the full viewport width.
+    new_step = st.slider(
         "Step",
         min_value=0,
         max_value=n,

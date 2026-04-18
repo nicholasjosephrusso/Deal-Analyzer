@@ -19,11 +19,14 @@ RANK_GLYPHS = {1: "A", 11: "J", 12: "Q", 13: "K"}
 
 CARD_CSS = """
 <style>
-.solv-pile { display: inline-block; vertical-align: top; margin-right: 18px; min-width: 60px; }
+.solv-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+.solv-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.solv-row.tableau { flex-wrap: nowrap; min-width: max-content; }
+.solv-pile { display: inline-block; vertical-align: top; margin-right: 14px; min-width: 58px; }
 .solv-pile-label { font-size: 11px; color: #888; text-align: center; margin-bottom: 4px; }
 .solv-card {
   display: block;
-  width: 56px; height: 78px;
+  width: 54px; height: 76px;
   border: 1px solid #444;
   border-radius: 6px;
   background: white;
@@ -31,8 +34,8 @@ CARD_CSS = """
   font-weight: 600;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 18px;
-  line-height: 78px;
-  margin-bottom: -56px;
+  line-height: 76px;
+  margin-bottom: -54px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.18);
   position: relative;
 }
@@ -46,10 +49,23 @@ CARD_CSS = """
   background: transparent;
   border: 1px dashed #888;
   color: #888;
-  font-size: 22px;
+  font-size: 20px;
 }
 .solv-card.last { margin-bottom: 0; }
-.solv-row { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* Mobile: shrink cards and allow horizontal swipe on the tableau row. */
+@media (max-width: 640px) {
+  .solv-pile { margin-right: 8px; min-width: 44px; }
+  .solv-pile-label { font-size: 9px; margin-bottom: 2px; }
+  .solv-card {
+    width: 42px; height: 60px;
+    font-size: 14px;
+    line-height: 60px;
+    border-radius: 5px;
+    margin-bottom: -42px;
+  }
+  .solv-card.empty { font-size: 16px; }
+}
 </style>
 """
 
@@ -113,7 +129,7 @@ def render_board(state: GameState) -> str:
     top_row = (
         '<div class="solv-row">'
         + "".join(foundation_piles)
-        + '<div style="width:30px;"></div>'
+        + '<div style="width:20px;"></div>'
         + _pile_html(stock_label, stock_html)
         + _pile_html(waste_label, waste_html)
         + "</div>"
@@ -130,8 +146,12 @@ def render_board(state: GameState) -> str:
         for j, c in enumerate(fu):
             cards_html.append(_card_html(c, last=(j == len(fu) - 1)))
         tableau_piles.append(_pile_html(f"T{i}", cards_html))
-    parts.append('<div style="height:18px;"></div>')
-    parts.append('<div class="solv-row">' + "".join(tableau_piles) + "</div>")
+    parts.append('<div style="height:14px;"></div>')
+    parts.append(
+        '<div class="solv-scroll"><div class="solv-row tableau">'
+        + "".join(tableau_piles)
+        + "</div></div>"
+    )
 
     return "".join(parts)
 
