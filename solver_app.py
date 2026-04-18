@@ -9,8 +9,10 @@ import json
 
 import streamlit as st
 
+from solitaire_solver.cards import Card
 from solitaire_solver.deal import (
     Deal,
+    build_custom_deal,
     deal_from_json,
     deal_to_json,
     make_random_deal,
@@ -24,6 +26,18 @@ from solitaire_solver.visual import render_board, state_at_step
 st.set_page_config(page_title="Klondike Solver", page_icon="\U0001F0CF", layout="wide")
 
 
+_RANK_CODE = {1: "A", 10: "10", 11: "J", 12: "Q", 13: "K"}
+
+
+def _fmt_code(card: Card) -> str:
+    """Format a Card back into its input code (e.g. ``10H``, ``AS``, ``QD``)."""
+    from solitaire_solver.cards import SUIT_CHARS
+
+    r = int(card.rank)
+    rank = _RANK_CODE.get(r, str(r))
+    return rank + SUIT_CHARS[int(card.suit)]
+
+
 def _load_deal_from_text(text: str) -> Deal | None:
     try:
         obj = json.loads(text)
@@ -33,13 +47,15 @@ def _load_deal_from_text(text: str) -> Deal | None:
         return None
 
 
+
+
 # ---------- Sidebar controls ----------
 
 with st.sidebar:
     st.header("Deal")
     source = st.radio(
         "Source",
-        ["Random seed", "Upload JSON", "Paste JSON"],
+        ["Random seed", "Build custom deal", "Upload JSON", "Paste JSON"],
         key="deal_source",
     )
 
@@ -50,6 +66,50 @@ with st.sidebar:
             st.session_state.solution = None
             st.session_state.step = 0
             st.session_state.deal_label = f"Random seed {int(seed)}"
+
+    elif source == "Build custom deal":
+        st.caption(
+            "Enter card codes (e.g. `AS 10H QD 7C`). Ranks: `A 2 3 4 5 6 7 8 9 "
+            "10 J Q K`. Suits: `S H D C`. For each tableau pile, the **last** "
+            "card is the face-up top; the rest are face-down. The solver needs "
+            "the full 52-card deal."
+        )
+        tableau_texts: list[str] = []
+        for i in range(7):
+            tableau_texts.append(
+                st.text_input(
+                    f"T{i} ({i + 1} card{'s' if i else ''}, bottom -> top)",
+                    key=f"custom_t_{i}",
+                )
+            )
+        stock_text = st.text_area(
+            "Stock (24 cards, draw order)",
+            key="custom_stock",
+            height=100,
+        )
+        cols = st.columns(2)
+        if cols[0].button("Build deal", use_container_width=True):
+            try:
+                deal = build_custom_deal(tableau_texts, stock_text)
+                st.session_state.deal = deal
+                st.session_state.solution = None
+                st.session_state.step = 0
+                st.session_state.deal_label = "Custom deal"
+                st.success("Deal built.")
+            except ValueError as e:
+                st.error(str(e))
+        if cols[1].button("Prefill example", use_container_width=True):
+            # Seed 42's deal, written out so you can see the expected format.
+            example = make_random_deal(42)
+            for i, pile in enumerate(example.tableau):
+                cards = list(pile.face_down) + list(pile.face_up)
+                st.session_state[f"custom_t_{i}"] = " ".join(
+                    _fmt_code(c) for c in cards
+                )
+            st.session_state["custom_stock"] = " ".join(
+                _fmt_code(c) for c in example.stock
+            )
+            st.rerun()
 
     elif source == "Upload JSON":
         f = st.file_uploader("Deal JSON", type=["json"], key="deal_upload")

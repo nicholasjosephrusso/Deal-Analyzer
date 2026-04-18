@@ -208,3 +208,49 @@ def deal_from_shuffled_deck(deck: list[Card]) -> Deal:
     )
     deal.validate()
     return deal
+
+
+def _parse_cards(text: str, *, expected: int, context: str) -> list[Card]:
+    """Parse whitespace/comma-separated card codes. Accepts ``10H`` or ``TH``."""
+    tokens = [t for t in text.replace(",", " ").split() if t]
+    cards: list[Card] = []
+    for tok in tokens:
+        code = tok.upper()
+        if len(code) == 3 and code.startswith("10"):
+            code = "T" + code[2]
+        try:
+            cards.append(Card.parse(code))
+        except ValueError as e:
+            raise ValueError(f"{context}: {e}") from None
+    if len(cards) != expected:
+        raise ValueError(
+            f"{context}: expected {expected} card(s), got {len(cards)}"
+        )
+    return cards
+
+
+def build_custom_deal(tableau_texts: list[str], stock_text: str) -> Deal:
+    """Assemble a fully-known Deal from seven tableau rows + a 24-card stock.
+
+    Each tableau row is a space-separated list of card codes, bottom-to-top.
+    The LAST card in each row is the face-up card; the rest are face-down.
+    Foundations start empty, waste starts empty.
+    """
+    if len(tableau_texts) != 7:
+        raise ValueError("Expected 7 tableau rows")
+    piles: list[TableauPile] = []
+    for i, txt in enumerate(tableau_texts):
+        cards = _parse_cards(txt, expected=i + 1, context=f"Tableau T{i}")
+        piles.append(
+            TableauPile(face_down=tuple(cards[:-1]), face_up=(cards[-1],))
+        )
+    stock_cards = _parse_cards(stock_text, expected=24, context="Stock")
+    deal = Deal(
+        tableau=tuple(piles),
+        stock=tuple(stock_cards),
+        waste=(),
+        foundations={k: None for k in ("S", "H", "D", "C")},
+        draw_count=3,
+    )
+    deal.validate()
+    return deal
