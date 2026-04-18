@@ -18,12 +18,17 @@ The `/solve` response includes:
 
 ## Run locally
 
+From the **repo root** (so the `solitaire_solver` package is importable):
+
 ```bash
-pip install -r ../requirements.txt -r requirements.txt
+pip install -r backend/requirements.txt
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 Then hit `http://localhost:8000/health`.
+
+The solver itself uses only the Python stdlib, so `backend/requirements.txt`
+(fastapi + uvicorn + pydantic) is all you need.
 
 ## Deploy
 
