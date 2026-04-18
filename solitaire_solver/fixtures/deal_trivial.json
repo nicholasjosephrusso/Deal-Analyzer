@@ -1,0 +1,16 @@
+{
+  "tableau": [
+    {"face_down": [], "face_up": []},
+    {"face_down": [], "face_up": []},
+    {"face_down": [], "face_up": []},
+    {"face_down": [], "face_up": []},
+    {"face_down": [], "face_up": []},
+    {"face_down": [], "face_up": []},
+    {"face_down": [], "face_up": []}
+  ],
+  "stock": ["KS"],
+  "waste": [],
+  "foundations": {"S": "QS", "H": "KH", "D": "KD", "C": "KC"},
+  "draw_count": 3,
+  "metadata": {"description": "One-move-from-win; used as smoke-test fixture."}
+}
