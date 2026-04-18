@@ -3,9 +3,9 @@ import type { DealJson, SolveResponse } from "./types";
 function apiBase(): string {
   // Client-side: prefer NEXT_PUBLIC_API_BASE, fallback to localhost for dev.
   if (typeof window !== "undefined") {
-    return process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+    return process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
   }
-  return process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+  return process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
 }
 
 export async function solveDeal(
